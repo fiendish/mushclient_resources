@@ -1,0 +1,108 @@
+name: Build and Deploy MUSHclient Resources
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SOLUTION_FILE_PATH: mc_resources.sln
+  GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN || secrets.GITHUB_TOKEN }}
+  GH_TOKEN: ${{ secrets.PERSONAL_TOKEN || secrets.GITHUB_TOKEN }}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        configuration: [Release, Debug]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@767f00a3f09872d96a0cb9fcd5e6a4ff33311330  # v2
+
+    - name: Build solution
+      run: msbuild /m /p:Configuration=${{ matrix.configuration }} /p:Platform=Win32 /verbosity:normal ${{ env.SOLUTION_FILE_PATH }}
+
+    - name: Upload Release artifacts
+      if: matrix.configuration == 'Release'
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+      with:
+        name: en_dll_Release
+        path: Release/en.dll
+
+    - name: Upload Debug artifacts
+      if: matrix.configuration == 'Debug'
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+      with:
+        name: en_dll_Debug
+        path: |
+          Debug/en.dll
+          Debug/en.pdb
+
+  deploy:
+    needs: build
+    runs-on: windows-latest
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+
+    - name: Download Release artifacts
+      uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # 7.0.0
+      with:
+        name: en_dll_Release
+        path: ./release
+
+    - name: Download Debug artifacts
+      uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # 7.0.0
+      with:
+        name: en_dll_Debug
+        path: ./debug
+
+    - name: Delete tags and releases
+      shell: bash
+      run: |
+        gh api repos/${{ github.repository }}/git/refs/tags/latest_commit -X DELETE || echo "Tag latest_commit not found"
+        gh release delete latest_commit --yes || echo "Release latest_commit not found"
+        gh api repos/${{ github.repository }}/git/refs/tags/latest_commit_debug -X DELETE || echo "Tag latest_commit_debug not found"
+        gh release delete latest_commit_debug --yes || echo "Release latest_commit_debug not found"
+
+    - name: Create Release build release
+      uses: softprops/action-gh-release@5122b4edc95f85501a71628a57dc180a03ec7588  # 2.5.0
+      with:
+        tag_name: latest_commit
+        name: Latest Commit (Release)
+        prerelease: true
+        files: ./release/en.dll
+        body: |
+          Automatic release build from latest commit.
+
+          **Build Configuration:** Release
+          **Commit:** ${{ github.sha }}
+          **Build Date:** ${{ github.run_id }}
+
+    - name: Create Debug build release
+      uses: softprops/action-gh-release@5122b4edc95f85501a71628a57dc180a03ec7588  # 2.5.0
+      with:
+        tag_name: latest_commit_debug
+        name: Latest Commit (Debug)
+        prerelease: true
+        files: |
+          ./debug/en.dll
+          ./debug/en.pdb
+        body: |
+          Automatic debug build from latest commit.
+
+          **Build Configuration:** Debug
+          **Commit:** ${{ github.sha }}
+          **Build Date:** ${{ github.run_id }}
